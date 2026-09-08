@@ -1,10 +1,11 @@
 cmake_minimum_required(VERSION 3.20)
-project(misko3_m7_opt C ASM)
+project(misko3 C ASM)
 
 set(CMAKE_C_STANDARD 11)
-set(TUSB ${CMAKE_SOURCE_DIR}/../tinyusb/src)
+# TinyUSB is a submodule one level up. Override with -DTUSB=/path/to/tinyusb/src
+set(TUSB "${CMAKE_SOURCE_DIR}/../tinyusb/src" CACHE PATH "TinyUSB src directory")
 
-add_executable(m7_opt
+add_executable(misko3
     src/main.c
     src/gud_device.c
     src/gud_usbd.c
@@ -29,36 +30,36 @@ add_executable(m7_opt
     ${TUSB}/portable/st/stm32_fsdev/fsdev_common.c
 )
 
-target_include_directories(m7_opt PRIVATE
+target_include_directories(misko3 PRIVATE
     src
     ${TUSB}
     cmsis/Include
     cmsis/Device/ST/STM32G4xx/Include
 )
 
-target_compile_definitions(m7_opt PRIVATE STM32G474xx)
+target_compile_definitions(misko3 PRIVATE STM32G474xx)
 
 set(CPU_FLAGS -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard)
 
-target_compile_options(m7_opt PRIVATE
+target_compile_options(misko3 PRIVATE
     ${CPU_FLAGS}
     -O2
     -Wall -Wextra
     -ffunction-sections -fdata-sections
 )
 
-target_link_options(m7_opt PRIVATE
+target_link_options(misko3 PRIVATE
     ${CPU_FLAGS}
     -T${CMAKE_SOURCE_DIR}/STM32G474QETX_FLASH.ld
     --specs=nano.specs
     --specs=nosys.specs
     -Wl,--gc-sections
-    -Wl,-Map=${CMAKE_BINARY_DIR}/m7_opt.map
+    -Wl,-Map=${CMAKE_BINARY_DIR}/misko3.map
     -Wl,--print-memory-usage
 )
 
-add_custom_command(TARGET m7_opt POST_BUILD
-    COMMAND arm-none-eabi-size $<TARGET_FILE:m7_opt>
+add_custom_command(TARGET misko3 POST_BUILD
+    COMMAND arm-none-eabi-size $<TARGET_FILE:misko3>
 
     # Intel HEX and raw binary alongside the ELF.
     #
@@ -67,6 +68,6 @@ add_custom_command(TARGET m7_opt POST_BUILD
     # the one to prefer: it carries its own load addresses, so nothing has to
     # be typed in. A raw BIN has no addresses at all and must be flashed to
     # 0x08000000 by hand.
-    COMMAND arm-none-eabi-objcopy -O ihex   $<TARGET_FILE:m7_opt> $<TARGET_FILE:m7_opt>.hex
-    COMMAND arm-none-eabi-objcopy -O binary $<TARGET_FILE:m7_opt> $<TARGET_FILE:m7_opt>.bin
+    COMMAND ${CMAKE_OBJCOPY} -O ihex   $<TARGET_FILE:misko3> $<TARGET_FILE:misko3>.hex
+    COMMAND ${CMAKE_OBJCOPY} -O binary $<TARGET_FILE:misko3> $<TARGET_FILE:misko3>.bin
 )

@@ -101,7 +101,46 @@ stays at 5 fps, which is the ceiling of full-speed USB rather than a defect.
 Per-milestone measurements are in [docs/milestones/](docs/milestones/), and the
 feasibility study that preceded the work is in [docs/FINDINGS.md](docs/FINDINGS.md).
 
-## Build
+## Requires Linux to work
+
+The display half needs the kernel's `gud` driver, which exists only on Linux.
+On Windows the board still enumerates and the **gamepad works**, but interface 0
+stays unclaimed and no screen appears. Driving the display from Windows would
+mean writing a host-side program that speaks the same protocol over WinUSB, or
+an Indirect Display Driver. Neither is in this repository.
+
+Building and flashing, on the other hand, work on Linux, macOS and Windows.
+
+## Build it yourself
+
+### 1. Get the toolchain
+
+**Linux**
+
+```sh
+sudo pacman -S arm-none-eabi-gcc arm-none-eabi-newlib make   # Arch, CachyOS
+sudo apt install gcc-arm-none-eabi make                      # Debian, Ubuntu
+```
+
+**macOS**
+
+```sh
+brew install --cask gcc-arm-embedded
+```
+
+**Windows**
+
+Install [STM32CubeIDE](https://www.st.com/en/development-tools/stm32cubeide.html).
+It brings `arm-none-eabi-gcc`, `make` and STM32CubeProgrammer in one installer.
+Build from its own **Build** button, or from a terminal after adding its
+`plugins\com.st.stm32cube.ide.mcu.externaltools.*\tools\bin` directories to
+`PATH`.
+
+Alternatively install the [Arm GNU toolchain](https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads)
+and [CMake](https://cmake.org/download/) separately, and use the CMake build
+below, which does not depend on a Unix shell.
+
+### 2. Clone and build
 
 ```sh
 git clone --recurse-submodules https://github.com/MrCloudy2/misko3-gud-display
@@ -109,27 +148,68 @@ cd misko3-gud-display/firmware
 make
 ```
 
-Needs `arm-none-eabi-gcc`. A CMake build is also provided and produces an
-identical binary. The result is 24,300 bytes of flash and 84,472 bytes of RAM.
+If you already cloned without `--recurse-submodules`:
+
+```sh
+git submodule update --init --depth 1
+```
+
+The CMake build is equivalent and is the better choice on Windows, since it
+needs no Unix shell:
+
+```sh
+cmake -B build -DCMAKE_TOOLCHAIN_FILE=arm-toolchain.cmake -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+```
+
+Either way you get `build/misko3.elf`, `.hex` and `.bin`, and the same figures:
+
+```
+RAM:    84472 B    128 KB    64.45 %
+FLASH:  24300 B    512 KB     4.63 %
+```
+
+Both builds use identical flags, so the binaries match.
+
+### 3. Opening it in STM32CubeIDE
+
+See [firmware/CUBEIDE.md](firmware/CUBEIDE.md). In short: `File` &rarr;
+`New` &rarr; `Makefile Project with Existing Code`, point it at `firmware/`,
+toolchain **MCU ARM GCC**.
 
 ## Flash
+
+**Linux and macOS**
 
 ```sh
 ./firmware/flash.sh
 ```
 
-The script finds whichever programmer is installed (STM32CubeProgrammer,
-`st-flash`, OpenOCD or probe-rs), picks the matching file, and then waits for
-the device to enumerate and reports what it found.
+**Windows**
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\firmware\flash.ps1
+```
+
+Both scripts find whichever programmer is installed (STM32CubeProgrammer,
+`st-flash`, OpenOCD, or probe-rs on Linux), pick the file that tool wants, and
+then wait for the board to enumerate and report what appeared. Nothing is
+compiled, so a machine that only flashes needs no ARM toolchain: copy
+`firmware/build/` across and run the script.
+
+The simplest route on any OS is to open `build/misko3.hex` in the
+STM32CubeProgrammer GUI and press Download. A `.hex` carries its own addresses;
+if you use the `.bin` instead you must enter `0x08000000` by hand.
 
 Every path caps SWD at 1000 kHz. This is not incidental: about twenty FMC bus
 pins switch right beside SWDIO, and at full speed debug transfers are corrupted.
 
 Note that `probe-rs reset` leaves this board unable to complete USB bring-up.
-The script uses probe-rs last and warns when it does. Every other tool resets
+The scripts use probe-rs last and warn when they do. Every other tool resets
 cleanly.
 
-For STM32CubeIDE, see [firmware/CUBEIDE.md](firmware/CUBEIDE.md).
+`flash.sh` is tested on Linux with all three of CubeProgrammer, `st-flash` and
+OpenOCD. `flash.ps1` is a translation of it and has not been run on Windows.
 
 ## Layout
 

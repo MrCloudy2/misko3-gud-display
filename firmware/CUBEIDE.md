@@ -36,7 +36,7 @@ Obe poti pripeljeta do istega: CubeIDE kliče `make` v tej mapi.
 
 `Project` &rarr; `Build Project`, ali <kbd>Ctrl</kbd>+<kbd>B</kbd>.
 
-Nastanejo `build/final.elf`, `build/final.hex` in `build/final.bin`.
+Nastanejo `build/misko3.elf`, `build/misko3.hex` in `build/misko3.bin`.
 
 Iz terminala je isto:
 
@@ -67,7 +67,7 @@ make flash CUBEPROG=/pot/do/STM32_Programmer_CLI
 `STM32 C/C++ Application`
 
 - Project: `final`
-- C/C++ Application: `build/final.elf`
+- C/C++ Application: `build/misko3.elf`
 - Zavihek `Debugger`: Debug probe **ST-LINK (OpenOCD)** ali **ST-LINK GDB
   server**, Board: `Custom`, MCU: `STM32G474QETx`
 - Zavihek `Debugger`, SWD frequency: **1000 kHz**
@@ -80,7 +80,7 @@ pokvarijo. Vse v tem projektu je bilo narejeno pri 1000 kHz ali manj.
 
 ### Samo naložiti, brez razhroščevanja
 
-Odpri `build/final.hex` v programu STM32CubeProgrammer, poveži se prek SWD in
+Odpri `build/misko3.hex` v programu STM32CubeProgrammer, poveži se prek SWD in
 klikni `Download`. Datoteka `.hex` nosi svoje naslove, zato ni treba vnašati
 ničesar. Če bi uporabil `.bin`, moraš ročno vpisati naslov `0x08000000`.
 

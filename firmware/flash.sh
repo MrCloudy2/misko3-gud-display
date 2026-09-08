@@ -25,13 +25,13 @@ CUBE=$(ls "$HOME"/st/stm32cubeide*/plugins/com.st.stm32cube.ide.mcu.externaltool
           /opt/st/stm32cubeide*/plugins/com.st.stm32cube.ide.mcu.externaltools.cubeprogrammer.linux64_*/tools/bin/STM32_Programmer_CLI \
           /opt/ST/STM32CubeProgrammer/bin/STM32_Programmer_CLI 2>/dev/null | head -1 || true)
 
-if [ -n "$CUBE" ] && [ -f "$B/final.hex" ]; then
+if [ -n "$CUBE" ] && [ -f "$B/misko3.hex" ]; then
     TOOL="STM32CubeProgrammer"
-elif command -v st-flash >/dev/null 2>&1 && [ -f "$B/final.bin" ]; then
+elif command -v st-flash >/dev/null 2>&1 && [ -f "$B/misko3.bin" ]; then
     TOOL="st-flash"
-elif command -v openocd >/dev/null 2>&1 && [ -f "$B/final.elf" ]; then
+elif command -v openocd >/dev/null 2>&1 && [ -f "$B/misko3.elf" ]; then
     TOOL="openocd"
-elif command -v probe-rs >/dev/null 2>&1 && [ -f "$B/final.elf" ]; then
+elif command -v probe-rs >/dev/null 2>&1 && [ -f "$B/misko3.elf" ]; then
     TOOL="probe-rs"
 else
     say "Ni ustreznega orodja ali datoteke."
@@ -53,21 +53,21 @@ say ""
 # vodila FMC preklapljajo tik ob liniji SWDIO in prenos se pokvari.
 case "$TOOL" in
 STM32CubeProgrammer)
-    "$CUBE" -c port=SWD freq=1000 -w "$B/final.hex" -rst
+    "$CUBE" -c port=SWD freq=1000 -w "$B/misko3.hex" -rst
     ;;
 st-flash)
     # .bin ne nosi naslovov, zato je 0x08000000 zapisan izrecno.
-    st-flash --freq=1000k --reset write "$B/final.bin" 0x08000000
+    st-flash --freq=1000k --reset write "$B/misko3.bin" 0x08000000
     ;;
 openocd)
     openocd -f interface/stlink.cfg -c "transport select hla_swd" \
             -f target/stm32g4x.cfg -c "adapter speed 1000" \
-            -c "program $B/final.elf verify reset exit"
+            -c "program $B/misko3.elf verify reset exit"
     ;;
 probe-rs)
     # Samo zapis. probe-rs reset na tej ploščici pusti USB nedelujoč,
     # zato po tem ploščico ročno odklopi in priklopi.
-    probe-rs download --chip STM32G474QE --speed 1000 "$B/final.elf"
+    probe-rs download --chip STM32G474QE --speed 1000 "$B/misko3.elf"
     say ""
     say "OPOZORILO: probe-rs ne resetira zanesljivo. Odklopi in priklopi USB."
     ;;

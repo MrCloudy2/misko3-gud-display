@@ -11,7 +11,7 @@
 #   make clean
 # ------------------------------------------------------------------
 
-TARGET   := final
+TARGET   := misko3
 BUILD    := build
 
 # Toolchain. CubeIDE puts its own arm-none-eabi-gcc on PATH; a system one
@@ -20,6 +20,16 @@ PREFIX   ?= arm-none-eabi-
 CC       := $(PREFIX)gcc
 OBJCOPY  := $(PREFIX)objcopy
 SIZE     := $(PREFIX)size
+
+# Directory commands differ between cmd.exe and a POSIX shell. GNU make sets
+# OS=Windows_NT on Windows, including the make that ships with STM32CubeIDE.
+ifeq ($(OS),Windows_NT)
+  mkdir_p = @if not exist "$(subst /,\,$(1))" mkdir "$(subst /,\,$(1))"
+  rm_rf   = @if exist "$(subst /,\,$(1))" rmdir /s /q "$(subst /,\,$(1))"
+else
+  mkdir_p = @mkdir -p $(1)
+  rm_rf   = @rm -rf $(1)
+endif
 
 # TinyUSB lives next to this directory. Override if it is somewhere else.
 TUSB     ?= ../tinyusb/src
@@ -84,15 +94,15 @@ all: $(BUILD)/$(TARGET).elf $(BUILD)/$(TARGET).hex $(BUILD)/$(TARGET).bin
 	@$(SIZE) $(BUILD)/$(TARGET).elf
 
 $(BUILD)/tusb/%.o: %.c
-	@mkdir -p $(dir $@)
+	$(call mkdir_p,$(patsubst %/,%,$(dir $@)))
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
 $(BUILD)/%.o: %.c
-	@mkdir -p $(dir $@)
+	$(call mkdir_p,$(patsubst %/,%,$(dir $@)))
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
 $(BUILD)/%.o: %.s
-	@mkdir -p $(dir $@)
+	$(call mkdir_p,$(patsubst %/,%,$(dir $@)))
 	$(CC) $(CPU) -c $< -o $@
 
 $(BUILD)/$(TARGET).elf: $(OBJ)
@@ -125,6 +135,11 @@ flash: $(BUILD)/$(TARGET).hex
 	"$(CUBEPROG)" -c port=SWD freq=1000 -w $< -rst
 
 # ------------------------------------------------------------------
+# The flash targets below use a POSIX shell and Linux paths. On Windows use
+# flash.ps1, or open build/misko3.hex in the STM32CubeProgrammer GUI.
+# ------------------------------------------------------------------
+
+# ------------------------------------------------------------------
 # Fallback programmers, for a machine without STM32CubeIDE installed.
 # Any one of these does the same job; pick whichever tool is present.
 # ------------------------------------------------------------------
@@ -144,6 +159,6 @@ flash-openocd:
 	        -c "program $(BUILD)/$(TARGET).elf verify reset exit"
 
 clean:
-	rm -rf $(BUILD)
+	$(call rm_rf,$(BUILD))
 
 -include $(DEP)
