@@ -43,6 +43,7 @@
 #include "buttons.h"
 #include "panel.h"
 #include "joystick.h"
+#include "touch.h"
 
 #define SYSCLK_HZ 170000000u
 
@@ -232,7 +233,7 @@ int main(void)
 
     delay_ms(300);
 
-    rtt_printf("\r\n=== MiSKo3 M7: in-place decode, 120-line bands ===\r\n");
+    rtt_printf("\r\n=== MiSKo3 M9: HAL joystick, on-screen fps, XPT2046 touch ===\r\n");
     rtt_printf("SYSCLK 170 MHz | USB clock = HSI48 + CRS (SOF-disciplined)\r\n");
     /* Read the IDs back out of the descriptor we actually hand the host, rather
      * than repeating them here -- a hardcoded banner goes stale the moment the
@@ -266,6 +267,7 @@ int main(void)
 
     buttons_init();
     joystick_init();
+    touch_init();
 
     /* Panel first, so colour bars appear before USB is even up. A blank panel
      * from here on means the display path is broken, not that the host has yet
@@ -296,6 +298,8 @@ int main(void)
     rtt_printf("joystick: ADC4 %s, centre x=%u y=%u\r\n",
                joystick_present() ? "OK" : "*** NOT PRESENT ***",
                (unsigned) joystick_centre_x(), (unsigned) joystick_centre_y());
+    rtt_printf("touch: XPT2046 on SPI1 %s (IRQ PD6, CS PE1, PG2/3/4)\r\n",
+               touch_present() ? "OK" : "*** NOT RESPONDING ***");
     rtt_printf("joystick wiring: PB14 (X) %s, PB15 (Y) %s\r\n",
                joy_x_driven ? "DRIVEN" : "*** FLOATING - not connected ***",
                joy_y_driven ? "DRIVEN" : "*** FLOATING - not connected ***");
@@ -309,15 +313,17 @@ int main(void)
     uint32_t last_reports = 0xFFFFFFFFu;
     uint32_t prev_chord = 0;
     uint32_t last_hid_log = 0;
+    uint32_t last_touch_log = 0, last_touch_reports = 0;
     uint32_t peak_wire_kbps = 0, peak_px_kbps = 0;
     uint64_t prev_bytes = 0, prev_cycles = 0;
-    uint64_t prev_wire = 0, prev_decomp = 0, prev_sync = 0;
+    uint64_t prev_wire = 0, prev_decomp = 0, prev_sync = 0, prev_ovl = 0;
     uint32_t prev_bufs = 0;
     int was_active = 0;
 
     for (;;) {
         tud_task();
         buttons_task(ms_ticks);
+        touch_task(ms_ticks);
 
         /* Roll a 1 ms tick from the cycle counter. */
         if ((dwt_now() - last_tick) >= (SYSCLK_HZ / 1000u)) {
@@ -370,6 +376,7 @@ int main(void)
             uint32_t d_wire = (uint32_t) (wire - prev_wire);
             uint32_t d_decomp = (uint32_t) (decomp - prev_decomp);
             uint32_t d_sync = (uint32_t) (sync - prev_sync);
+            uint32_t d_ovl = (uint32_t) (panel_overlay_cycles - prev_ovl);
             uint32_t d_bufs = bufs - prev_bufs;
 
             prev_bytes = bytes;
@@ -377,6 +384,7 @@ int main(void)
             prev_wire = wire;
             prev_decomp = decomp;
             prev_sync = sync;
+            prev_ovl = panel_overlay_cycles;
             prev_bufs = bufs;
 
             if (d_bufs == 0u) {
@@ -438,10 +446,12 @@ int main(void)
 
                 uint32_t sync_us = (uint32_t) ((uint64_t) d_sync
                                                / (SYSCLK_HZ / 1000000u));
+                uint32_t ovl_us = (uint32_t) ((uint64_t) d_ovl
+                                              / (SYSCLK_HZ / 1000000u));
 
                 rtt_printf("[rate] %s %lu rect/s | wire %lu kB/s -> px %lu kB/s "
                            "(%lu.%02lux) = %lu.%02lu full fps | dec %lu + blit %lu "
-                           "+ sync %lu us = %lu%% cpu | err %lu/%lu rec %lu | "
+                           "+ sync %lu us + ovl %lu us = %lu%% cpu | err %lu/%lu rec %lu | "
                            "PEAK wire %lu px %lu kB/s\r\n",
                            panel_tearfree ? "TF" : "--",
                            (unsigned long) d_bufs,
@@ -454,6 +464,7 @@ int main(void)
                            (unsigned long) dec_us,
                            (unsigned long) blit_us,
                            (unsigned long) sync_us,
+                           (unsigned long) ovl_us,
                            (unsigned long) cpu_pct,
                            (unsigned long) gud_stat_decomp_errors,
                            (unsigned long) gud_stat_errors,
@@ -477,6 +488,25 @@ int main(void)
          * can drain it. That is a debug feature costing real bandwidth in the
          * main loop, so it is capped.
          */
+        /*
+         * Touch, logged only while something is happening and at most four
+         * times a second. This is the line to watch when settling the
+         * orientation flags in touch.h: touch the top-left corner of the
+         * image and the mapped pair should read close to 0,0.
+         */
+        if (touch_reports != last_touch_reports
+            && (ms_ticks - last_touch_log) >= 250u) {
+            last_touch_reports = touch_reports;
+            last_touch_log = ms_ticks;
+            rtt_printf("[touch] %s raw=%u,%u -> %u,%u (of 4095) "
+                       "| reports %lu presses %lu\r\n",
+                       touch_down ? "DOWN" : "up  ",
+                       (unsigned) touch_raw_x, (unsigned) touch_raw_y,
+                       (unsigned) touch_x, (unsigned) touch_y,
+                       (unsigned long) touch_reports,
+                       (unsigned long) touch_presses);
+        }
+
         if (buttons_reports != last_reports && (ms_ticks - last_hid_log) >= 250u) {
             last_reports = buttons_reports;
             last_hid_log = ms_ticks;

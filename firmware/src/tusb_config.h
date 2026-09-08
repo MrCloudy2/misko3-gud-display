@@ -40,7 +40,11 @@
  * the HID driver below.
  */
 #define CFG_TUD_CDC               0
-#define CFG_TUD_HID               1
+/* Two HID interfaces: instance 0 is the gamepad, instance 1 the touch
+ * screen. They are kept apart rather than merged behind report IDs on one
+ * interface, because adding a report ID to the gamepad would change the
+ * report layout the host already knows and would break an existing mapping. */
+#define CFG_TUD_HID               2
 #define CFG_TUD_MSC               0
 #define CFG_TUD_MIDI              0
 #define CFG_TUD_VENDOR            0
@@ -48,6 +52,7 @@
 /* A gamepad report from TUD_HID_REPORT_DESC_GAMEPAD() is 11 bytes: six 8-bit
  * axes, a packed hat/button byte and a 32-bit button field. 16 rounds it up
  * with room to spare and costs 16 bytes of USB packet memory. */
+/* The touch report is 7 bytes; the gamepad report is 12. 16 covers both. */
 #define CFG_TUD_HID_EP_BUFSIZE    16
 
 #endif /* _TUSB_CONFIG_H_ */

@@ -12,4 +12,10 @@ void panel_init(void);
 uint32_t panel_scan_total_lines(void);
 uint32_t panel_scan_period_cycles(void);
 
+
+/* On-screen frame rate overlay, top left corner. */
+extern uint32_t panel_fps_overlay;      /* 1 = on */
+extern uint32_t panel_fps_x10;          /* most recent rate, times ten */
+extern uint64_t panel_overlay_cycles;   /* cost of drawing it, in cycles */
+
 #endif /* PANEL_H */

@@ -1,3 +1,12 @@
+> ### Development branch
+>
+> This is `dev`, which adds a resistive touch screen, an on-screen frame
+> counter and an ST HAL based ADC and SPI setup. It builds and has been run on
+> hardware, but it has had far less use than `main`.
+>
+> For the stable version: `git checkout main`, or the
+> [v1.0.0 release](https://github.com/MrCloudy2/misko3-gud-display/releases/tag/v1.0.0).
+
 # MiSKo3 as a USB display and gamepad
 
 Firmware that makes an STM32G474 development board appear to Linux as a **real
@@ -8,6 +17,26 @@ kernel since 5.13, and the gamepad by the standard `usbhid`. Plug it in and KDE
 offers it as a second screen you can drag a window onto.
 
 ![The board running as a second display](docs/photo.jpg)
+
+## What this branch adds
+
+- **Touch screen.** The board's XPT2046 resistive panel is presented as a third
+  USB interface, a HID digitizer. Linux puts it in `HID_GROUP_MULTITOUCH`, which
+  `hid-multitouch` claims, so it arrives as a real touch screen with
+  `INPUT_PROP_DIRECT` rather than as a pointer. Verified on hardware:
+  `props=2`, `ID_INPUT_TOUCHSCREEN=1`, and `ABS_MT_POSITION_X/Y` present.
+  The orientation flags at the top of `src/touch.h` may need flipping for a
+  given panel; touch the top-left corner and watch the console.
+- **On-screen frame counter**, top left, drawn after each band. About 0.7 % of
+  the frame budget. This is the counter visible in the photo above.
+- **HAL for ADC4 and SPI1**, see [firmware/hal/README.md](firmware/hal/README.md)
+  for why, and what it costs.
+
+Cost against `main`: 32,160 B of flash instead of 24,300, and 88,864 B of RAM
+instead of 84,472.
+
+KDE needs to be told which output the touch screen belongs to, or the touches
+land on the primary monitor. That is host configuration, not a device problem.
 
 *Left: the display settings, where a new `USB-1` output has appeared. Right: the
 board showing the desktop. The frame counter on the panel is from a development
