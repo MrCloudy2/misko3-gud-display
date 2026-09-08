@@ -289,7 +289,7 @@ int main(void)
         rtt_printf("GET_SCANLINE counts %lu lines but the image is only %u tall,\r\n"
                    "so it tracks image X: the panel refreshes column by column.\r\n",
                    (unsigned long) lines, (unsigned) GUD_HEIGHT);
-        rtt_printf("press BTN_OK to toggle tear-free mode (now: ON)\r\n");
+        rtt_printf("chords: ESC+stick = tear-free, OK+stick = on-screen fps\r\n");
     }
 
     tusb_init();
@@ -311,7 +311,7 @@ int main(void)
     uint32_t last_mounted = 0xFFu;
 
     uint32_t last_reports = 0xFFFFFFFFu;
-    uint32_t prev_chord = 0;
+    uint32_t prev_chord = 0, prev_chord_fps = 0;
     uint32_t last_hid_log = 0;
     uint32_t last_touch_log = 0, last_touch_reports = 0;
     uint32_t peak_wire_kbps = 0, peak_px_kbps = 0;
@@ -512,28 +512,33 @@ int main(void)
             last_hid_log = ms_ticks;
 
             /*
-             * Tear-free toggle: BTN_ESC and JOY_BTN held together.
+             * Two diagnostic toggles, each on a chord of a trigger plus the
+             * stick click. Neither happens during play, and both buttons still
+             * report to the host as themselves.
              *
-             * This was BTN_OK alone while M6 was being tested, which is wrong
-             * now that the board is a gamepad: BTN_OK is button A, so every
-             * jump in a game would have flipped the display's blit strategy.
-             *
-             * A chord of two buttons that are never pressed together in normal
-             * play (B plus the stick click) keeps the diagnostic available
-             * without it firing by accident. Both buttons still report to the
-             * host as themselves; the chord is only watched here.
+             * Single buttons were tried first and are wrong now that the board
+             * is a gamepad: BTN_OK is button A, so every jump in a game would
+             * have flipped the display's blit strategy.
              *
              * Edge-triggered on the chord forming, so holding it is one toggle.
              */
-            uint32_t chord = ((buttons_state & 0x6u) == 0x6u) ? 1u : 0u;
+            uint32_t chord_tf  = ((buttons_state & CHORD_TEARFREE) == CHORD_TEARFREE) ? 1u : 0u;
+            uint32_t chord_fps = ((buttons_state & CHORD_FPS) == CHORD_FPS) ? 1u : 0u;
 
-            if (chord && !prev_chord) {
+            if (chord_tf && !prev_chord) {
                 panel_tearfree = !panel_tearfree;
                 rtt_printf("[sync] tear-free mode %s\r\n",
                            panel_tearfree ? "ON (column-major, scan-ordered)"
                                           : "OFF (row-major, M5 behaviour)");
             }
-            prev_chord = chord;
+            prev_chord = chord_tf;
+
+            if (chord_fps && !prev_chord_fps) {
+                panel_fps_overlay_set(!panel_fps_overlay);
+                rtt_printf("[fps] on-screen counter %s\r\n",
+                           panel_fps_overlay ? "ON" : "off");
+            }
+            prev_chord_fps = chord_fps;
 
             /* PINS shows which physical switch was actually pressed, before
              * any A/B/X/Y interpretation, so the mapping can be established

@@ -20,6 +20,7 @@
  */
 
 #include <stdint.h>
+#include <string.h>
 
 #include "stm32g4xx.h"
 #include "gud_device.h"
@@ -691,6 +692,19 @@ static const uint8_t ovl_font[14][7] = {
 
 static uint16_t ovl_buf[OVL_W * OVL_H];
 
+/*
+ * A copy of what the overlay covers, so switching it off can put the desktop
+ * back rather than leaving a stale rectangle.
+ *
+ * The device never holds a framebuffer, so those pixels exist only for the
+ * instant a band carrying them passes through. They are copied out of the band
+ * on its way to the panel, which costs 4,032 B of RAM and one memcpy per
+ * qualifying band. Bands that do not reach the top left corner are ignored and
+ * the previous copy is kept.
+ */
+static uint16_t ovl_under[OVL_W * OVL_H];
+static int ovl_under_valid;
+
 uint32_t panel_fps_overlay = 1;     /* overlay on */
 uint32_t panel_fps_x10;             /* most recent rate, times ten */
 uint64_t panel_overlay_cycles;      /* overlay cost, kept apart from the blit */
@@ -698,6 +712,28 @@ uint64_t panel_overlay_cycles;      /* overlay cost, kept apart from the blit */
 static uint64_t ovl_prev_bytes;
 static uint32_t ovl_last_t;
 static uint32_t ovl_drawn_x10 = 0xFFFFFFFFu;
+
+/*
+ * Keep a copy of the region the overlay is about to cover.
+ *
+ * Only whole-coverage bands are taken. Both comparisons force x and y to zero,
+ * because the overlay sits in the corner, so the source index below is simply
+ * row * width + column.
+ */
+static void ovl_capture(const struct gud_set_buffer_req *req, const uint8_t *pixels)
+{
+    if (req->x != 0u || req->y != 0u ||
+        req->width < OVL_W || req->height < OVL_H)
+        return;
+
+    const uint16_t *src = (const uint16_t *) (const void *) pixels;
+
+    for (uint32_t row = 0; row < OVL_H; row++)
+        memcpy(&ovl_under[row * OVL_W], &src[row * req->width],
+               OVL_W * sizeof(uint16_t));
+
+    ovl_under_valid = 1;
+}
 
 /* Draw one glyph into ovl_buf at character position `slot`. */
 static void ovl_glyph(uint32_t slot, uint8_t idx, uint16_t fg)
@@ -751,6 +787,28 @@ static void ovl_render(uint32_t fps_x10)
 
     for (uint32_t i = 0; i < OVL_CHARS; i++)
         ovl_glyph(i, slots[i], 0xFFFFu);        /* white text */
+}
+
+/*
+ * Turn the overlay on or off.
+ *
+ * Switching it off repaints the region from the copy taken on the way past, so
+ * the desktop underneath comes back immediately. Without a copy, which only
+ * happens if no band has yet reached the top left corner, the pixels are left
+ * alone and the next repaint of that area clears them.
+ */
+void panel_fps_overlay_set(uint32_t on)
+{
+    on = on ? 1u : 0u;
+    if (on == panel_fps_overlay)
+        return;
+
+    panel_fps_overlay = on;
+
+    if (!on && ovl_under_valid) {
+        lcd_window(0, 0, OVL_W, OVL_H);
+        blit_cpu(ovl_under, OVL_W * OVL_H);
+    }
 }
 
 /*
@@ -836,7 +894,12 @@ void gud_panel_write_buffer(const struct gud_set_buffer_req *req,
      * it does not pollute panel_blit_cycles. */
     if (panel_fps_overlay) {
         uint32_t t3 = dwt_now();
+        ovl_capture(req, pixels);
         ovl_task();
         panel_overlay_cycles += (uint64_t) (dwt_now() - t3);
+    } else {
+        /* Keep the copy fresh even while hidden, so switching it back on and
+         * off again does not restore a stale rectangle. */
+        ovl_capture(req, pixels);
     }
 }

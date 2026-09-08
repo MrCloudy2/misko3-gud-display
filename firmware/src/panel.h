@@ -18,4 +18,7 @@ extern uint32_t panel_fps_overlay;      /* 1 = on */
 extern uint32_t panel_fps_x10;          /* most recent rate, times ten */
 extern uint64_t panel_overlay_cycles;   /* cost of drawing it, in cycles */
 
+/* Toggle the overlay. Switching it off restores the pixels underneath. */
+void panel_fps_overlay_set(uint32_t on);
+
 #endif /* PANEL_H */
