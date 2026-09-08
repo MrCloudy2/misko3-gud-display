@@ -289,7 +289,7 @@ int main(void)
         rtt_printf("GET_SCANLINE counts %lu lines but the image is only %u tall,\r\n"
                    "so it tracks image X: the panel refreshes column by column.\r\n",
                    (unsigned long) lines, (unsigned) GUD_HEIGHT);
-        rtt_printf("chords: ESC+stick = tear-free, OK+stick = on-screen fps\r\n");
+        rtt_printf("chords: ESC+OK+left = tear-free, ESC+OK+right = on-screen fps\r\n");
     }
 
     tusb_init();
@@ -324,6 +324,44 @@ int main(void)
         tud_task();
         buttons_task(ms_ticks);
         touch_task(ms_ticks);
+
+        /*
+         * Two diagnostic toggles, each on a chord of a trigger plus the stick
+         * click. Neither happens during play, and both buttons still report to
+         * the host as themselves.
+         *
+         * This runs every pass of the loop, not inside the console logging
+         * below. It lived there at first, which meant a chord was only noticed
+         * on the passes where a log line happened to be due: at most four
+         * times a second, and only when a HID report had just been sent. The
+         * toggles missed most presses as a result.
+         *
+         * Single buttons were tried before that and are wrong now that the
+         * board is a gamepad: BTN_OK is button A, so every jump in a game
+         * would have flipped the display's blit strategy.
+         *
+         * Edge-triggered on the chord forming, so holding it is one toggle.
+         */
+        uint32_t chord_tf  = ((buttons_state & CHORD_TEARFREE) == CHORD_TEARFREE) ? 1u : 0u;
+        uint32_t chord_fps = ((buttons_state & CHORD_FPS) == CHORD_FPS) ? 1u : 0u;
+
+        if (chord_tf && !prev_chord) {
+            panel_tearfree = !panel_tearfree;
+            rtt_printf("[sync] tear-free mode %s\r\n",
+                       panel_tearfree ? "ON (column-major, scan-ordered)"
+                                      : "OFF (row-major, M5 behaviour)");
+        }
+        prev_chord = chord_tf;
+
+        if (chord_fps && !prev_chord_fps) {
+            int restored = panel_fps_overlay_set(!panel_fps_overlay);
+            rtt_printf("[fps] on-screen counter %s (btn=%08lX)%s\r\n",
+                       panel_fps_overlay ? "ON" : "off",
+                       (unsigned long) buttons_state,
+                       restored ? "" : " -- nothing saved to restore yet, the"
+                                       " old pixels stay until a repaint");
+        }
+        prev_chord_fps = chord_fps;
 
         /* Roll a 1 ms tick from the cycle counter. */
         if ((dwt_now() - last_tick) >= (SYSCLK_HZ / 1000u)) {
@@ -510,35 +548,6 @@ int main(void)
         if (buttons_reports != last_reports && (ms_ticks - last_hid_log) >= 250u) {
             last_reports = buttons_reports;
             last_hid_log = ms_ticks;
-
-            /*
-             * Two diagnostic toggles, each on a chord of a trigger plus the
-             * stick click. Neither happens during play, and both buttons still
-             * report to the host as themselves.
-             *
-             * Single buttons were tried first and are wrong now that the board
-             * is a gamepad: BTN_OK is button A, so every jump in a game would
-             * have flipped the display's blit strategy.
-             *
-             * Edge-triggered on the chord forming, so holding it is one toggle.
-             */
-            uint32_t chord_tf  = ((buttons_state & CHORD_TEARFREE) == CHORD_TEARFREE) ? 1u : 0u;
-            uint32_t chord_fps = ((buttons_state & CHORD_FPS) == CHORD_FPS) ? 1u : 0u;
-
-            if (chord_tf && !prev_chord) {
-                panel_tearfree = !panel_tearfree;
-                rtt_printf("[sync] tear-free mode %s\r\n",
-                           panel_tearfree ? "ON (column-major, scan-ordered)"
-                                          : "OFF (row-major, M5 behaviour)");
-            }
-            prev_chord = chord_tf;
-
-            if (chord_fps && !prev_chord_fps) {
-                panel_fps_overlay_set(!panel_fps_overlay);
-                rtt_printf("[fps] on-screen counter %s\r\n",
-                           panel_fps_overlay ? "ON" : "off");
-            }
-            prev_chord_fps = chord_fps;
 
             /* PINS shows which physical switch was actually pressed, before
              * any A/B/X/Y interpretation, so the mapping can be established

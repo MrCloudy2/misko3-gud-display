@@ -138,8 +138,20 @@ void buttons_task(uint32_t ms_ticks)
     static int8_t   prev_tr = 0, prev_tl = 0;   /* != resting value: forces a
                                                  * first report after mount */
 
-    if (!tud_hid_ready())
-        return;
+    /*
+     * The pins are read whether or not USB can take a report.
+     *
+     * This check used to sit here, above everything, which meant that when the
+     * HID endpoint was busy the switches were not even sampled. That is fine
+     * on an idle desktop and wrong under load: at 88 rectangles a second the
+     * blit and the decompressor starve tud_task(), the endpoint stays busy,
+     * and buttons_task() returned at its first line for minutes at a time.
+     * Measured that way, only three reports got through in three minutes and
+     * the diagnostic chords in main() could never form.
+     *
+     * Reading is cheap and has nothing to do with USB. Only the report send
+     * below waits for the endpoint.
+     */
 
     /* 100 Hz, matching the 10 ms bInterval in the endpoint descriptor. Polling
      * faster than the host asks for would just burn CPU. */
@@ -242,12 +254,29 @@ void buttons_task(uint32_t ms_ticks)
      * interval reserves a slot in every frame whether or not we use it. Sending
      * nothing when nothing has changed leaves that bandwidth to the pixels.
      */
+    /*
+     * Publish the state now, before anything can return early. main() watches
+     * it for the chords, and those must keep working while the display is
+     * saturated, which is exactly when a diagnostic toggle is wanted.
+     */
+    buttons_state = buttons;
+    buttons_hat = hat;
+    buttons_axis_x = axis_x;
+    buttons_axis_y = axis_y;
+    buttons_trigger_r = trigger_r;
+
     if (buttons == prev_buttons && hat == prev_hat &&
         axis_x == prev_x && axis_y == prev_y &&
         trigger_r == prev_tr && trigger_l == prev_tl)
         return;
 
     buttons_raw_changed++;
+
+    /* Something changed, so a report is due. If the endpoint is still busy,
+     * leave prev_* alone and try again on the next pass rather than losing
+     * the change. */
+    if (!tud_hid_ready())
+        return;
 
     prev_buttons = buttons;
     prev_hat = hat;
@@ -264,10 +293,5 @@ void buttons_task(uint32_t ms_ticks)
     tud_hid_gamepad_report(0, axis_x, axis_y, trigger_l, trigger_r,
                            0, 0, hat, buttons);
 
-    buttons_state = buttons;
-    buttons_hat = hat;
-    buttons_axis_x = axis_x;
-    buttons_axis_y = axis_y;
-    buttons_trigger_r = trigger_r;
     buttons_reports++;
 }

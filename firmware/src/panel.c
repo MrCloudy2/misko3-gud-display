@@ -797,18 +797,31 @@ static void ovl_render(uint32_t fps_x10)
  * happens if no band has yet reached the top left corner, the pixels are left
  * alone and the next repaint of that area clears them.
  */
-void panel_fps_overlay_set(uint32_t on)
+int panel_fps_overlay_set(uint32_t on)
 {
     on = on ? 1u : 0u;
     if (on == panel_fps_overlay)
-        return;
+        return 1;
 
     panel_fps_overlay = on;
 
-    if (!on && ovl_under_valid) {
-        lcd_window(0, 0, OVL_W, OVL_H);
-        blit_cpu(ovl_under, OVL_W * OVL_H);
-    }
+    if (on)
+        return 1;
+
+    /*
+     * Switching off. Put back what the counter covered.
+     *
+     * If no band has yet carried those pixels past us there is nothing to put
+     * back, and the stale rectangle stays until the host next repaints that
+     * corner. The caller is told which happened, because from the outside the
+     * two look identical: the counter appears not to have disappeared.
+     */
+    if (!ovl_under_valid)
+        return 0;
+
+    lcd_window(0, 0, OVL_W, OVL_H);
+    blit_cpu(ovl_under, OVL_W * OVL_H);
+    return 1;
 }
 
 /*

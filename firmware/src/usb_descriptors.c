@@ -223,11 +223,40 @@ uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id,
 {
     (void) report_id;
 
-    if (instance == 1 && report_type == HID_REPORT_TYPE_FEATURE && reqlen >= 1) {
-        buffer[0] = 1;              /* Contact Count Maximum */
+    /*
+     * Contact Count Maximum, read by hid-multitouch while it probes.
+     *
+     * Note there is no length test here. The host asks for this with
+     * wLength = 0 first, and returning 0 from this callback is fatal:
+     * hidd_control_xfer_cb() does TU_ASSERT(xferlen > 0), and TU_ASSERT
+     * expands to a BKPT that fires only when a debugger is attached. The
+     * board therefore worked perfectly in normal use and halted the instant
+     * probe-rs connected, which is a memorable way to lose an evening.
+     *
+     * Answering with one byte is safe either way: tud_control_xfer() clamps
+     * the data stage to wLength, so a zero-length request still produces a
+     * zero-length data stage.
+     */
+    if (report_type == HID_REPORT_TYPE_FEATURE && instance == 1) {
+        buffer[0] = 1;
         return 1;
     }
-    return 0;
+
+    /*
+     * Any other report fetched over the control pipe. Nothing needs these:
+     * button and touch state travels on its own interrupt endpoint. They are
+     * answered with a zeroed report of the declared size, for the same reason
+     * as above: this callback must never return zero.
+     */
+    uint16_t len = (instance == 0) ? (uint16_t) sizeof(hid_gamepad_report_t)
+                                   : 7u;    /* touch report, see desc_touch_report */
+    if (reqlen && len > reqlen)
+        len = reqlen;
+    if (len == 0)
+        len = 1;
+
+    memset(buffer, 0, len);
+    return len;
 }
 
 void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
