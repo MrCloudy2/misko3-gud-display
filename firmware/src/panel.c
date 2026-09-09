@@ -705,7 +705,12 @@ static uint16_t ovl_buf[OVL_W * OVL_H];
 static uint16_t ovl_under[OVL_W * OVL_H];
 static int ovl_under_valid;
 
-uint32_t panel_fps_overlay = 1;     /* overlay on */
+/*
+ * Off by default. It is a diagnostic, and it sits on top of whatever the host
+ * is drawing. Switch it on with the button chord in main(); the pixels it
+ * covers are saved on the way past, so switching it off puts them back.
+ */
+uint32_t panel_fps_overlay = 0;
 uint32_t panel_fps_x10;             /* most recent rate, times ten */
 uint64_t panel_overlay_cycles;      /* overlay cost, kept apart from the blit */
 

@@ -289,7 +289,7 @@ int main(void)
         rtt_printf("GET_SCANLINE counts %lu lines but the image is only %u tall,\r\n"
                    "so it tracks image X: the panel refreshes column by column.\r\n",
                    (unsigned long) lines, (unsigned) GUD_HEIGHT);
-        rtt_printf("chords: ESC+OK+left = tear-free, ESC+OK+right = on-screen fps\r\n");
+        rtt_printf("chords: ESC+OK+left = tear-free, ESC+OK+right = on-screen fps (off)\r\n");
     }
 
     tusb_init();

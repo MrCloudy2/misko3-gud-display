@@ -1,12 +1,3 @@
-> ### Development branch
->
-> This is `dev`. It adds a touch screen, an on-screen frame counter and an
-> ST HAL based ADC and SPI setup. It runs on hardware but has had far less use
-> than `main`.
->
-> For the stable version: `git checkout main`, or the
-> [v1.0.0 release](https://github.com/MrCloudy2/misko3-gud-display/releases/tag/v1.0.0).
-
 # MiSKo3 as a USB display and gamepad
 
 Firmware that makes an STM32G474 development board appear to Linux as a **real
@@ -18,18 +9,16 @@ and your desktop offers it as a second screen you can drag a window onto.
 
 ![The board running as a second display](docs/photo.jpg)
 
-## What this branch adds
+## What you get
 
-- **Touch screen.** The board's XPT2046 resistive panel appears as a third USB
-  interface, a HID digitizer. Linux places it in `HID_GROUP_MULTITOUCH`, so
-  `hid-multitouch` claims it and it arrives as a real touch screen rather than
-  a pointer.
-- **On-screen frame counter**, top left, toggled with a button chord. This is
-  the counter visible in the photo above.
-- **ST HAL for ADC4 and SPI1**, see [firmware/hal/README.md](firmware/hal/README.md).
-
-Cost against `main`: 32,660 bytes of flash instead of 24,300, and 92,904 of RAM
-instead of 84,472.
+- **A second monitor**, 320×240, that your compositor treats like any other
+  output.
+- **A gamepad**: four face buttons, an analogue stick and two triggers.
+- **A touch screen.** The board's XPT2046 panel appears as a HID digitizer.
+  Linux places it in `HID_GROUP_MULTITOUCH`, so `hid-multitouch` claims it and
+  it behaves as a real touch screen rather than a pointer.
+- **An optional on-screen frame counter**, off by default, toggled with a
+  button chord. It is the number visible in the photo above.
 
 ## Before you start
 
@@ -49,8 +38,8 @@ screen appears.
 
 ### 1. Get the firmware
 
-Download `misko3-v1.1.2-dev.hex` from the
-[latest pre-release](https://github.com/MrCloudy2/misko3-gud-display/releases/tag/v1.1.2-dev).
+Download `misko3-v1.2.0.hex` from the
+[latest release](https://github.com/MrCloudy2/misko3-gud-display/releases/latest).
 That is all you need; building from source is optional and covered further
 down.
 
@@ -73,13 +62,13 @@ On Windows, install
 Connect the ST-LINK and run one of these:
 
 ```sh
-st-flash --freq=1000k --reset write misko3-v1.1.2-dev.bin 0x08000000
+st-flash --freq=1000k --reset write misko3-v1.2.0.bin 0x08000000
 ```
 
 ```sh
 openocd -f interface/stlink.cfg -c "transport select hla_swd" \
         -f target/stm32g4x.cfg -c "adapter speed 1000" \
-        -c "program misko3-v1.1.2-dev.hex verify reset exit"
+        -c "program misko3-v1.2.0.hex verify reset exit"
 ```
 
 Or open the `.hex` in the STM32CubeProgrammer GUI, connect over SWD, and press
@@ -125,15 +114,16 @@ the wrong corner, flip the orientation flags at the top of
 `firmware/src/touch.h` rather than using a host-side calibration matrix, so the
 board stays correct on any machine.
 
-**Two diagnostic toggles**, if you want to see the difference they make:
+**The frame counter** is off by default, since it draws over whatever the host
+is showing. Hold **ESC + OK + right** to turn it on, and the same chord again
+to turn it off. Switching it off restores the pixels it covered rather than
+leaving a stale rectangle.
 
-| chord | effect |
-|---|---|
-| ESC + OK + left | tear-free blit on or off |
-| ESC + OK + right | on-screen frame counter on or off |
+There is a second toggle on **ESC + OK + left**, which turns the tear-free blit
+off and back on, if you want to see what it is doing for you.
 
-Hold all three. Both triggers plus a direction is not something that happens
-while playing.
+Hold all three buttons together. Both triggers plus a direction is not
+something that happens while playing.
 
 ## If something is wrong
 
@@ -184,7 +174,7 @@ cmake -B build -DCMAKE_TOOLCHAIN_FILE=arm-toolchain.cmake -DCMAKE_BUILD_TYPE=Rel
 cmake --build build
 ```
 
-Both builds use identical flags and produce the same binary: 32,660 bytes of
+Both builds use identical flags and produce the same binary: 32,664 bytes of
 flash and 92,904 bytes of RAM. You get `build/misko3.elf`, `.hex` and `.bin`.
 
 To flash what you just built, `firmware/flash.sh` finds whichever programmer is
