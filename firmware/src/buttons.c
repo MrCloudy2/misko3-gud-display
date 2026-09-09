@@ -117,16 +117,6 @@ uint32_t buttons_raw_changed;
 #define PAD_RT    GAMEPAD_BUTTON_TR2      /* bit 9  */
 #define PAD_LS    GAMEPAD_BUTTON_THUMBL   /* bit 13 */
 
-/*
- * Above this, the analogue stick also drives the hat switch.
- *
- * The four direction switches are face buttons now, so nothing else would
- * report a D-pad -- and menu-driven games often read only the hat. Deriving it
- * from the stick keeps those working. Half deflection is a deliberate choice:
- * high enough that a resting stick never triggers it, low enough that a normal
- * push does.
- */
-#define HAT_THRESHOLD (AXIS_MAX / 2)
 
 void buttons_task(uint32_t ms_ticks)
 {
@@ -231,20 +221,24 @@ void buttons_task(uint32_t ms_ticks)
      * Derive the hat from the stick, so games that only read a D-pad still
      * work now that the direction switches have become face buttons.
      */
-    int s_up    = (axis_y <= -HAT_THRESHOLD);
-    int s_down  = (axis_y >=  HAT_THRESHOLD);
-    int s_left  = (axis_x <= -HAT_THRESHOLD);
-    int s_right = (axis_x >=  HAT_THRESHOLD);
-
+    /*
+     * The hat stays centred. Nothing on this board drives it.
+     *
+     * It used to be derived from the analogue stick, so that games reading
+     * only a D-pad would still respond. That turned out to be worse than the
+     * problem it solved: a game that reads both the stick and the hat sees one
+     * physical movement twice and moves at double speed, which is what happens
+     * on a real pad only when two separate controls are pushed together.
+     *
+     * The four direction switches cannot take the hat over either. They are
+     * the face buttons A, B, X and Y, and a switch cannot be in two places at
+     * once.
+     *
+     * The field is still declared in the report descriptor and still sent, at
+     * its centred value. Removing it would change the report layout and break
+     * any mapping a host has already learned for this device.
+     */
     uint8_t hat = GAMEPAD_HAT_CENTERED;
-    if      (s_up   && s_right) hat = GAMEPAD_HAT_UP_RIGHT;
-    else if (s_up   && s_left)  hat = GAMEPAD_HAT_UP_LEFT;
-    else if (s_down && s_right) hat = GAMEPAD_HAT_DOWN_RIGHT;
-    else if (s_down && s_left)  hat = GAMEPAD_HAT_DOWN_LEFT;
-    else if (s_up)              hat = GAMEPAD_HAT_UP;
-    else if (s_down)            hat = GAMEPAD_HAT_DOWN;
-    else if (s_left)            hat = GAMEPAD_HAT_LEFT;
-    else if (s_right)           hat = GAMEPAD_HAT_RIGHT;
 
     /*
      * Only transmit on change.
