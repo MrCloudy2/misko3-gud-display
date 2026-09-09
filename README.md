@@ -9,6 +9,17 @@ and your desktop offers it as a second screen you can drag a window onto.
 
 ![The board running as a second display](docs/photo.jpg)
 
+## What you get
+
+- **A second monitor**, 320×240, that your compositor treats like any other
+  output.
+- **A gamepad**: four face buttons, an analogue stick and two triggers.
+- **A touch screen.** The board's XPT2046 panel appears as a HID digitizer.
+  Linux places it in `HID_GROUP_MULTITOUCH`, so `hid-multitouch` claims it and
+  it behaves as a real touch screen rather than a pointer.
+- **An optional on-screen frame counter**, off by default, toggled with a
+  button chord. It is the number visible in the photo above.
+
 ## Before you start
 
 | | |
@@ -17,6 +28,7 @@ and your desktop offers it as a second screen you can drag a window onto.
 | To flash | an ST-LINK, and one of STM32CubeProgrammer, `st-flash` or OpenOCD |
 | To use the display | **Linux**, kernel 5.13 or newer |
 | To use the gamepad | Linux, Windows or macOS |
+| To use the touch screen | Linux, with `hid-multitouch` available |
 
 The display needs the kernel's `gud` driver and there is no Windows or macOS
 equivalent. On those the board still enumerates and the gamepad works, but no
@@ -26,7 +38,7 @@ screen appears.
 
 ### 1. Get the firmware
 
-Download `misko3-v1.0.0.hex` from the
+Download `misko3-v1.2.0.hex` from the
 [latest release](https://github.com/MrCloudy2/misko3-gud-display/releases/latest).
 That is all you need; building from source is optional and covered further
 down.
@@ -50,13 +62,13 @@ On Windows, install
 Connect the ST-LINK and run one of these:
 
 ```sh
-st-flash --freq=1000k --reset write misko3-v1.0.0.bin 0x08000000
+st-flash --freq=1000k --reset write misko3-v1.2.0.bin 0x08000000
 ```
 
 ```sh
 openocd -f interface/stlink.cfg -c "transport select hla_swd" \
         -f target/stm32g4x.cfg -c "adapter speed 1000" \
-        -c "program misko3-v1.0.0.hex verify reset exit"
+        -c "program misko3-v1.2.0.hex verify reset exit"
 ```
 
 Or open the `.hex` in the STM32CubeProgrammer GUI, connect over SWD, and press
@@ -95,15 +107,23 @@ sudo modprobe gud
 **The gamepad** appears as `js0`. The four direction switches are A, B, X and
 Y, the thumbstick is the left stick, and OK and ESC are the triggers.
 
-**Two diagnostic toggles**, if you want to see the difference they make:
+**The touch screen** appears as a second input device. Your compositor has to
+be told which output it belongs to, or touches land on the primary monitor; in
+KDE that is System Settings, Input Devices, Touchscreen. If the touch lands in
+the wrong corner, flip the orientation flags at the top of
+`firmware/src/touch.h` rather than using a host-side calibration matrix, so the
+board stays correct on any machine.
 
-| chord | effect |
-|---|---|
-| ESC + OK + left | tear-free blit on or off |
-| ESC + OK + right | on-screen frame counter on or off |
+**The frame counter** is off by default, since it draws over whatever the host
+is showing. Hold **ESC + OK + right** to turn it on, and the same chord again
+to turn it off. Switching it off restores the pixels it covered rather than
+leaving a stale rectangle.
 
-Hold all three. Both triggers plus a direction is not something that happens
-while playing.
+There is a second toggle on **ESC + OK + left**, which turns the tear-free blit
+off and back on, if you want to see what it is doing for you.
+
+Hold all three buttons together. Both triggers plus a direction is not
+something that happens while playing.
 
 ## If something is wrong
 
@@ -119,9 +139,13 @@ means the board is healthy but no host has connected. Same fix as above.
 cable. `probe-rs reset` in particular leaves this board unable to complete USB
 bring-up; every other programmer resets cleanly.
 
-**Touch input lands on the wrong monitor.** Only on the `dev` branch, which
-adds touch. Your compositor has to be told which output the touch screen
-belongs to; in KDE that is System Settings, Input Devices.
+**Touch input lands on the wrong monitor.** Your compositor has to be told
+which output the touch screen belongs to; in KDE that is System Settings,
+Input Devices, Touchscreen.
+
+**The stick click does nothing.** On the board this was developed against, the
+thumbstick's push switch is not connected to PC13, though the schematic says it
+should be. Nothing depends on it: both toggles use the triggers instead.
 
 ## Build from source
 
@@ -150,8 +174,8 @@ cmake -B build -DCMAKE_TOOLCHAIN_FILE=arm-toolchain.cmake -DCMAKE_BUILD_TYPE=Rel
 cmake --build build
 ```
 
-Both builds use identical flags and produce the same binary: 24,300 bytes of
-flash and 84,472 bytes of RAM. You get `build/misko3.elf`, `.hex` and `.bin`.
+Both builds use identical flags and produce the same binary: 32,664 bytes of
+flash and 92,904 bytes of RAM. You get `build/misko3.elf`, `.hex` and `.bin`.
 
 To flash what you just built, `firmware/flash.sh` finds whichever programmer is
 installed, picks the right file and waits for the board to enumerate.
@@ -194,8 +218,10 @@ Everything under `firmware/src/` is my own work apart from the ST startup file.
   stack, enumeration and the HID class. The GUD interface has no class driver
   in the library; that one is `firmware/src/gud_usbd.c`.
 - **CMSIS** (ST) for register definitions, the startup file and the linker
-  script. No HAL or LL functions on this branch; registers are written
-  directly.
+  script.
+- **ST's STM32G4 HAL**, for ADC4 and SPI1 only. Provenance and licence in
+  [firmware/hal/README.md](firmware/hal/README.md). Everything else still
+  writes registers directly.
 - The ILI9341 initialisation sequence follows the board's factory firmware.
 - The GUD protocol is defined by `include/drm/gud.h` in the Linux kernel.
   [gud-pico](https://github.com/notro/gud-pico) was read as a reference; no

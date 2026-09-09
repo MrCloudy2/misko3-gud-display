@@ -29,6 +29,7 @@
  */
 
 #include "stm32g4xx.h"
+#include "stm32g4xx_hal.h"
 #include "joystick.h"
 
 #define SYSCLK_HZ 170000000u
@@ -160,18 +161,45 @@ static int wait_until(volatile uint32_t *reg, uint32_t mask, uint32_t want)
     return 1;
 }
 
+/* ADC4 handle, which HAL needs on every call. */
+static ADC_HandleTypeDef hadc4;
+
+/*
+ * One conversion on the requested channel, through HAL.
+ *
+ * Against the direct version in m7: there we wrote the channel number into
+ * SQR1 and set ADSTART. HAL_ADC_ConfigChannel() does the same and additionally
+ * sets the sampling time and checks that the channel exists on this ADC.
+ *
+ * HAL_ADC_PollForConversion() takes a timeout in milliseconds, which is the
+ * equivalent of our own wait_until(). It gets those milliseconds from
+ * HAL_GetTick(), derived from the DWT counter in hal_glue.c.
+ */
 static uint16_t adc_read(uint32_t channel)
 {
-    /* One conversion, this channel. SQR1: L[3:0] is (count - 1), so zero
-     * means a single conversion; SQ1[10:6] names the channel. */
-    ADC4->SQR1 = (channel << ADC_SQR1_SQ1_Pos);
+    ADC_ChannelConfTypeDef ch = {0};
 
-    ADC4->CR |= ADC_CR_ADSTART;
-    if (!wait_until(&ADC4->ISR, ADC_ISR_EOC, ADC_ISR_EOC))
+    ch.Channel      = (channel == JOY_CH_X) ? ADC_CHANNEL_4 : ADC_CHANNEL_5;
+    ch.Rank         = ADC_REGULAR_RANK_1;
+    ch.SamplingTime = ADC_SAMPLETIME_640CYCLES_5;
+    ch.SingleDiff   = ADC_SINGLE_ENDED;
+    ch.OffsetNumber = ADC_OFFSET_NONE;
+    ch.Offset       = 0;
+
+    if (HAL_ADC_ConfigChannel(&hadc4, &ch) != HAL_OK)
+        return 2048;
+
+    if (HAL_ADC_Start(&hadc4) != HAL_OK)
+        return 2048;
+
+    if (HAL_ADC_PollForConversion(&hadc4, 10u) != HAL_OK) {
+        HAL_ADC_Stop(&hadc4);
         return 2048;            /* mid-scale: reads as centred, not deflected */
+    }
 
-    /* Reading DR clears EOC. */
-    return (uint16_t) ADC4->DR;
+    uint16_t v = (uint16_t) HAL_ADC_GetValue(&hadc4);
+    HAL_ADC_Stop(&hadc4);
+    return v;
 }
 
 /*
@@ -194,23 +222,31 @@ static uint16_t adc_read(uint32_t channel)
  */
 static int pin_is_driven(uint32_t pin)
 {
-    uint32_t moder_save = GPIOB->MODER;
-    uint32_t pupdr_save = GPIOB->PUPDR;
+    GPIO_InitTypeDef g = {0};
+    uint16_t mask = (uint16_t) (1u << pin);
     int with_up, with_down;
 
-    GPIOB->MODER = moder_save & ~(3u << (pin * 2));         /* 00 = input     */
+    g.Pin  = mask;
+    g.Mode = GPIO_MODE_INPUT;
 
-    GPIOB->PUPDR = (pupdr_save & ~(3u << (pin * 2))) | (1u << (pin * 2));
-    delay_us(200);                                          /* 40k against any
-                                                             * stray capacitance */
-    with_up = (int) ((GPIOB->IDR >> pin) & 1u);
+    g.Pull = GPIO_PULLUP;
+    HAL_GPIO_Init(GPIOB, &g);
+    delay_us(200);                       /* 40k against any stray capacitance */
+    with_up = (HAL_GPIO_ReadPin(GPIOB, mask) == GPIO_PIN_SET);
 
-    GPIOB->PUPDR = (pupdr_save & ~(3u << (pin * 2))) | (2u << (pin * 2));
+    g.Pull = GPIO_PULLDOWN;
+    HAL_GPIO_Init(GPIOB, &g);
     delay_us(200);
-    with_down = (int) ((GPIOB->IDR >> pin) & 1u);
+    with_down = (HAL_GPIO_ReadPin(GPIOB, mask) == GPIO_PIN_SET);
 
-    GPIOB->MODER = moder_save;
-    GPIOB->PUPDR = pupdr_save;
+/*
+     * Back to analogue mode. The m7 version saved and restored the whole MODER
+     * and PUPDR registers; HAL works per pin, so the final state is stated
+     * explicitly. It is also the state the ADC needs.
+     */
+    g.Mode = GPIO_MODE_ANALOG;
+    g.Pull = GPIO_NOPULL;
+    HAL_GPIO_Init(GPIOB, &g);
 
     return (with_up == with_down);
 }
@@ -245,94 +281,77 @@ void joystick_wiring_poll(void)
 
     joy_wiring_checks++;
 
-    /* Put the pins back into analogue mode: pin_is_driven() restores MODER,
-     * but only to whatever it was on entry, so this is belt and braces for the
-     * case where it is ever called before joystick_init() finishes. */
-    GPIOB->MODER |= (3u << (14 * 2)) | (3u << (15 * 2));
+    /* pin_is_driven() already leaves both pins in analogue mode, so nothing
+     * is needed here. The m7 version had another MODER write at this point,
+     * because that implementation only restored whatever it found on entry. */
 }
 
 void joystick_init(void)
 {
-    RCC->AHB2ENR |= RCC_AHB2ENR_GPIOBEN;
-    (void) RCC->AHB2ENR;
+    /*
+     * HAL_Init() enables the instruction and data caches and calls
+     * HAL_InitTick(), which hal_glue.c overrides so that no SysTick interrupt
+     * is started: this project deliberately runs without interrupts other
+     * than USB.
+     */
+    HAL_Init();
+
+    __HAL_RCC_GPIOB_CLK_ENABLE();
 
     /* Check the wiring before trusting either reading. */
     joy_x_driven = pin_is_driven(14);
     joy_y_driven = pin_is_driven(15);
 
-    /* PB14 and PB15 to analogue mode (MODER = 11) with no pull, so the pin is
-     * disconnected from the digital input buffer and cannot load the pot. */
-    GPIOB->MODER |= (3u << (14 * 2)) | (3u << (15 * 2));
-    GPIOB->PUPDR &= ~((3u << (14 * 2)) | (3u << (15 * 2)));
+    /* pin_is_driven() leaves both pins analogue with no pull, which is
+     * exactly what the ADC needs: the digital input buffer is disconnected
+     * and cannot load the potentiometer. */
 
     /* ADC4 lives in the ADC345 group and has its own clock enable. */
-    RCC->AHB2ENR |= RCC_AHB2ENR_ADC345EN;
-    (void) RCC->AHB2ENR;
+    __HAL_RCC_ADC345_CLK_ENABLE();
 
     /*
-     * Clock the ADC from HCLK divided by 4.
+     * ADC4 configuration.
      *
-     * CKMODE = 11 selects HCLK/4 = 42.5 MHz, which is inside the G4's 60 MHz
-     * ADC limit. Using HCLK directly (CKMODE = 01) would be 170 MHz and out of
-     * specification. The alternative is the asynchronous kernel clock selected
-     * by RCC_CCIPR.ADC345SEL, which would need configuring separately for no
-     * benefit here.
-     */
-    ADC345_COMMON->CCR = (ADC345_COMMON->CCR & ~ADC_CCR_CKMODE_Msk)
-                       | (0x3u << ADC_CCR_CKMODE_Pos);
-
-    /*
-     * Bring the ADC out of deep power-down and start its internal regulator.
+     * ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4 means HCLK/4 = 42.5 MHz, which
+     * is inside the G4's 60 MHz ADC limit. It is the same value the m7 version
+     * wrote by hand into ADC345_COMMON->CCR as CKMODE = 11.
      *
-     * Out of reset the ADC is in deep power-down (DEEPPWD set) and the
-     * regulator is off. RM0440 requires the regulator start-up time --
-     * specified as 20 us on this part -- to elapse before anything else is
-     * written, including the calibration request.
+     * HAL_ADC_Init() handles leaving deep power-down (DEEPPWD), starts the
+     * internal regulator and waits the specified 20 us.
      */
-    ADC4->CR &= ~ADC_CR_DEEPPWD;
-    ADC4->CR |= ADC_CR_ADVREGEN;
-    delay_us(25);
+    hadc4.Instance                      = ADC4;
+    hadc4.Init.ClockPrescaler           = ADC_CLOCK_SYNC_PCLK_DIV4;
+    hadc4.Init.Resolution               = ADC_RESOLUTION_12B;
+    hadc4.Init.DataAlign                = ADC_DATAALIGN_RIGHT;
+    hadc4.Init.ScanConvMode             = ADC_SCAN_DISABLE;
+    hadc4.Init.EOCSelection             = ADC_EOC_SINGLE_CONV;
+    hadc4.Init.LowPowerAutoWait         = DISABLE;
+    hadc4.Init.ContinuousConvMode       = DISABLE;
+    hadc4.Init.NbrOfConversion          = 1;
+    hadc4.Init.DiscontinuousConvMode    = DISABLE;
+    hadc4.Init.ExternalTrigConv         = ADC_SOFTWARE_START;
+    hadc4.Init.ExternalTrigConvEdge     = ADC_EXTERNALTRIGCONVEDGE_NONE;
+    hadc4.Init.DMAContinuousRequests    = DISABLE;
+    hadc4.Init.Overrun                  = ADC_OVR_DATA_OVERWRITTEN;
+    hadc4.Init.OversamplingMode         = DISABLE;
+    hadc4.Init.GainCompensation         = 0;
+
+    if (HAL_ADC_Init(&hadc4) != HAL_OK)
+        return;                     /* joy_present stays 0, the board carries on */
 
     /*
-     * Calibrate. This measures and cancels the ADC's own offset error, and it
-     * can only be done with the ADC disabled. ADCALDIF = 0 selects
-     * single-ended calibration, which is what these inputs are.
+     * Calibration.
+     *
+     * This is where HAL is genuinely better than the hand-written version.
+     * RM0440 requires ADEN to be set only 4 ADC clock cycles after hardware
+     * clears ADCAL. m7 missed that delay and the board hung waiting for ADRDY;
+     * the fix there was a manual delay_us(2).
+     *
+     * HAL_ADCEx_Calibration_Start() knows the sequence and inserts the delay
+     * itself.
      */
-    ADC4->CR &= ~ADC_CR_ADCALDIF;
-    ADC4->CR |= ADC_CR_ADCAL;
-    if (!wait_until(&ADC4->CR, ADC_CR_ADCAL, 0))
+    if (HAL_ADCEx_Calibration_Start(&hadc4, ADC_SINGLE_ENDED) != HAL_OK)
         return;
-
-    /*
-     * RM0440: "software is allowed to set ADEN only 4 ADC clock cycles after
-     * the ADCAL bit is cleared by hardware."
-     *
-     * This is not a formality. Setting ADEN inside that window is silently
-     * ignored -- the bit simply reads back as zero -- and the wait for ADRDY
-     * below then never finishes. That is exactly what happened on the first
-     * run of this code: ADC4->CR read 0x10000000, showing ADVREGEN set and
-     * calibration complete but ADEN still clear, with the CPU spinning in the
-     * ADRDY loop.
-     *
-     * 2 us is about 85 cycles of the 42.5 MHz ADC clock, so the margin is
-     * enormous and it costs nothing at boot.
-     */
-    delay_us(2);
-
-    /* Enable. ADRDY is cleared by writing 1 to it, then set by hardware when
-     * the ADC is ready to convert. */
-    ADC4->ISR = ADC_ISR_ADRDY;
-    ADC4->CR |= ADC_CR_ADEN;
-    if (!wait_until(&ADC4->ISR, ADC_ISR_ADRDY, ADC_ISR_ADRDY))
-        return;
-
-    /*
-     * Sampling time for channels 4 and 5. SMPR1 holds three bits per channel
-     * for channels 0..9, so channel 4 is bits 14:12 and channel 5 is bits
-     * 17:15. 0b111 is 640.5 cycles -- see the header comment.
-     */
-    ADC4->SMPR1 = (ADC4->SMPR1 & ~((7u << 12) | (7u << 15)))
-                | (7u << 12) | (7u << 15);
 
     /*
      * Measure the resting position.

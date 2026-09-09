@@ -20,6 +20,7 @@
  */
 
 #include <stdint.h>
+#include <string.h>
 
 #include "stm32g4xx.h"
 #include "gud_device.h"
@@ -439,6 +440,10 @@ static void draw_splash(void)
             *dst = bars[(x * 8u) / GUD_WIDTH];
 }
 
+/* Defined further down, with the overlay. panel_init() calls it so the text
+ * is on screen from boot. */
+static void ovl_task(void);
+
 void panel_init(void)
 {
     fmc_gpio_init();
@@ -481,6 +486,14 @@ void panel_init(void)
     fill_cpu(0x0000, GUD_WIDTH * GUD_HEIGHT);
 
     draw_splash();
+
+    /* Draw the overlay now, even though no frame has arrived. That way the
+     * text rendering is shown to work before any host connects: if the colour
+     * bars come up with 0.0 fps over them, the font and the blit are fine and
+     * any later problem is in the counting, not the drawing. */
+    if (panel_fps_overlay)
+        ovl_task();
+
     LCD_BKLT_ON();
 }
 
@@ -626,6 +639,232 @@ static void blit_columnwise(const struct gud_set_buffer_req *req,
     }
 }
 
+/* ------------------------------------------------------------------ */
+/* On-screen frame rate overlay, top left corner                        */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Why on the panel and not only on the console.
+ *
+ * The RTT console needs a debug probe attached. This overlay makes the rate
+ * readable when the board is connected by USB alone -- during a game, or on
+ * somebody else's machine.
+ *
+ * It is redrawn after every band. Band 0 covers the top half of the screen
+ * and would overwrite it, so it has to be restored each time; band 1 does not
+ * reach it, but redrawing is cheap enough that telling the two apart is not
+ * worth the complication.
+ */
+
+#define OVL_SCALE  2u
+#define OVL_CHARS  9u
+#define OVL_PAD    2u
+#define OVL_W      (OVL_CHARS * 6u * OVL_SCALE + 2u * OVL_PAD)   /* 112 */
+#define OVL_H      (7u * OVL_SCALE + 2u * OVL_PAD)               /*  18 */
+
+/*
+ * A 5 x 7 font holding only the characters this string needs: the digits, a
+ * full stop, a blank, and the letters f, p and s. Each row is 5 bits, with the
+ * most significant bit leftmost.
+ */
+static const uint8_t ovl_font[14][7] = {
+    { 0x0E,0x11,0x13,0x15,0x19,0x11,0x0E },   /* 0 */
+    { 0x04,0x0C,0x04,0x04,0x04,0x04,0x0E },   /* 1 */
+    { 0x0E,0x11,0x01,0x02,0x04,0x08,0x1F },   /* 2 */
+    { 0x1F,0x02,0x04,0x02,0x01,0x11,0x0E },   /* 3 */
+    { 0x02,0x06,0x0A,0x12,0x1F,0x02,0x02 },   /* 4 */
+    { 0x1F,0x10,0x1E,0x01,0x01,0x11,0x0E },   /* 5 */
+    { 0x06,0x08,0x10,0x1E,0x11,0x11,0x0E },   /* 6 */
+    { 0x1F,0x01,0x02,0x04,0x08,0x08,0x08 },   /* 7 */
+    { 0x0E,0x11,0x11,0x0E,0x11,0x11,0x0E },   /* 8 */
+    { 0x0E,0x11,0x11,0x0F,0x01,0x02,0x0C },   /* 9 */
+    { 0x00,0x00,0x00,0x00,0x00,0x0C,0x0C },   /* . */
+    { 0x06,0x09,0x08,0x1C,0x08,0x08,0x08 },   /* f */
+    { 0x00,0x00,0x1E,0x11,0x1E,0x10,0x10 },   /* p */
+    { 0x00,0x00,0x0F,0x10,0x0E,0x01,0x1E },   /* s */
+};
+
+#define GLYPH_DOT   10
+#define GLYPH_F     11
+#define GLYPH_P     12
+#define GLYPH_S     13
+#define GLYPH_BLANK 255
+
+static uint16_t ovl_buf[OVL_W * OVL_H];
+
+/*
+ * A copy of what the overlay covers, so switching it off can put the desktop
+ * back rather than leaving a stale rectangle.
+ *
+ * The device never holds a framebuffer, so those pixels exist only for the
+ * instant a band carrying them passes through. They are copied out of the band
+ * on its way to the panel, which costs 4,032 B of RAM and one memcpy per
+ * qualifying band. Bands that do not reach the top left corner are ignored and
+ * the previous copy is kept.
+ */
+static uint16_t ovl_under[OVL_W * OVL_H];
+static int ovl_under_valid;
+
+/*
+ * Off by default. It is a diagnostic, and it sits on top of whatever the host
+ * is drawing. Switch it on with the button chord in main(); the pixels it
+ * covers are saved on the way past, so switching it off puts them back.
+ */
+uint32_t panel_fps_overlay = 0;
+uint32_t panel_fps_x10;             /* most recent rate, times ten */
+uint64_t panel_overlay_cycles;      /* overlay cost, kept apart from the blit */
+
+static uint64_t ovl_prev_bytes;
+static uint32_t ovl_last_t;
+static uint32_t ovl_drawn_x10 = 0xFFFFFFFFu;
+
+/*
+ * Keep a copy of the region the overlay is about to cover.
+ *
+ * Only whole-coverage bands are taken. Both comparisons force x and y to zero,
+ * because the overlay sits in the corner, so the source index below is simply
+ * row * width + column.
+ */
+static void ovl_capture(const struct gud_set_buffer_req *req, const uint8_t *pixels)
+{
+    if (req->x != 0u || req->y != 0u ||
+        req->width < OVL_W || req->height < OVL_H)
+        return;
+
+    const uint16_t *src = (const uint16_t *) (const void *) pixels;
+
+    for (uint32_t row = 0; row < OVL_H; row++)
+        memcpy(&ovl_under[row * OVL_W], &src[row * req->width],
+               OVL_W * sizeof(uint16_t));
+
+    ovl_under_valid = 1;
+}
+
+/* Draw one glyph into ovl_buf at character position `slot`. */
+static void ovl_glyph(uint32_t slot, uint8_t idx, uint16_t fg)
+{
+    if (idx == GLYPH_BLANK)
+        return;
+
+    uint32_t x0 = OVL_PAD + slot * 6u * OVL_SCALE;
+    uint32_t y0 = OVL_PAD;
+
+    for (uint32_t row = 0; row < 7u; row++) {
+        uint8_t bits = ovl_font[idx][row];
+        for (uint32_t col = 0; col < 5u; col++) {
+            if (!((bits >> (4u - col)) & 1u))
+                continue;
+            /* One font pixel is an OVL_SCALE x OVL_SCALE square. */
+            for (uint32_t dy = 0; dy < OVL_SCALE; dy++)
+                for (uint32_t dx = 0; dx < OVL_SCALE; dx++)
+                    ovl_buf[(y0 + row * OVL_SCALE + dy) * OVL_W
+                          + (x0 + col * OVL_SCALE + dx)] = fg;
+        }
+    }
+}
+
+/* Build the bitmap for a string like "  40.0 fps" from rate-times-ten. */
+static void ovl_render(uint32_t fps_x10)
+{
+    uint8_t slots[OVL_CHARS];
+    uint32_t whole = fps_x10 / 10u;
+    uint32_t frac  = fps_x10 % 10u;
+
+    if (whole > 999u) { whole = 999u; frac = 9u; }
+
+    for (uint32_t i = 0; i < OVL_CHARS; i++)
+        slots[i] = GLYPH_BLANK;
+
+    /* Whole part right-aligned in slots 0..2 so the text does not jitter. */
+    slots[2] = (uint8_t) (whole % 10u);
+    if (whole >= 10u)  slots[1] = (uint8_t) ((whole / 10u) % 10u);
+    if (whole >= 100u) slots[0] = (uint8_t) (whole / 100u);
+
+    slots[3] = GLYPH_DOT;
+    slots[4] = (uint8_t) frac;
+    /* slot 5 stays blank */
+    slots[6] = GLYPH_F;
+    slots[7] = GLYPH_P;
+    slots[8] = GLYPH_S;
+
+    for (uint32_t i = 0; i < OVL_W * OVL_H; i++)
+        ovl_buf[i] = 0x0000;                    /* black ground, for contrast */
+
+    for (uint32_t i = 0; i < OVL_CHARS; i++)
+        ovl_glyph(i, slots[i], 0xFFFFu);        /* white text */
+}
+
+/*
+ * Turn the overlay on or off.
+ *
+ * Switching it off repaints the region from the copy taken on the way past, so
+ * the desktop underneath comes back immediately. Without a copy, which only
+ * happens if no band has yet reached the top left corner, the pixels are left
+ * alone and the next repaint of that area clears them.
+ */
+int panel_fps_overlay_set(uint32_t on)
+{
+    on = on ? 1u : 0u;
+    if (on == panel_fps_overlay)
+        return 1;
+
+    panel_fps_overlay = on;
+
+    if (on)
+        return 1;
+
+    /*
+     * Switching off. Put back what the counter covered.
+     *
+     * If no band has yet carried those pixels past us there is nothing to put
+     * back, and the stale rectangle stays until the host next repaints that
+     * corner. The caller is told which happened, because from the outside the
+     * two look identical: the counter appears not to have disappeared.
+     */
+    if (!ovl_under_valid)
+        return 0;
+
+    lcd_window(0, 0, OVL_W, OVL_H);
+    blit_cpu(ovl_under, OVL_W * OVL_H);
+    return 1;
+}
+
+/*
+ * Recompute the rate and draw the overlay.
+ *
+ * The rate comes from panel_pixel_bytes, that is from bytes actually written
+ * to the panel, not from a count of bands. A whole frame is
+ * 320 * 240 * 2 = 153,600 B, so fps = bytes_per_second / 153,600.
+ *
+ * The interval is not exactly one second, because this runs only when a band
+ * arrives. So the elapsed time is measured and divided out.
+ */
+static void ovl_task(void)
+{
+    uint32_t now = dwt_now();
+    uint32_t dt = now - ovl_last_t;
+
+    if (dt >= SYSCLK_HZ) {
+        uint64_t d = panel_pixel_bytes - ovl_prev_bytes;
+
+        ovl_prev_bytes = panel_pixel_bytes;
+        ovl_last_t = now;
+
+        /* fps * 10 = (bytes * 10 * f_cpu) / (dt * bytes_per_frame) */
+        panel_fps_x10 = (uint32_t) ((d * 10ull * (uint64_t) SYSCLK_HZ)
+                                    / ((uint64_t) dt
+                                       * (uint64_t) (GUD_WIDTH * GUD_HEIGHT * 2u)));
+    }
+
+    if (panel_fps_x10 != ovl_drawn_x10) {
+        ovl_render(panel_fps_x10);
+        ovl_drawn_x10 = panel_fps_x10;
+    }
+
+    lcd_window(0, 0, OVL_W, OVL_H);
+    blit_cpu(ovl_buf, OVL_W * OVL_H);
+}
+
 /*
  * One rectangle of pixels has arrived. Put it on the panel.
  *
@@ -668,4 +907,17 @@ void gud_panel_write_buffer(const struct gud_set_buffer_req *req,
     panel_blit_cycles += (uint64_t) (t2 - t1);
     panel_pixel_bytes += (uint64_t) req->width * req->height * 2u;
     panel_buffers++;
+
+    /* Overlay last, once the counters are updated, and timed separately so
+     * it does not pollute panel_blit_cycles. */
+    if (panel_fps_overlay) {
+        uint32_t t3 = dwt_now();
+        ovl_capture(req, pixels);
+        ovl_task();
+        panel_overlay_cycles += (uint64_t) (dwt_now() - t3);
+    } else {
+        /* Keep the copy fresh even while hidden, so switching it back on and
+         * off again does not restore a stale rectangle. */
+        ovl_capture(req, pixels);
+    }
 }

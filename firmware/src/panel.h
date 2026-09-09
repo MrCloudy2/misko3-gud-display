@@ -12,4 +12,17 @@ void panel_init(void);
 uint32_t panel_scan_total_lines(void);
 uint32_t panel_scan_period_cycles(void);
 
+
+/* On-screen frame rate overlay, top left corner. */
+extern uint32_t panel_fps_overlay;      /* 1 = on */
+extern uint32_t panel_fps_x10;          /* most recent rate, times ten */
+extern uint64_t panel_overlay_cycles;   /* cost of drawing it, in cycles */
+
+/*
+ * Toggle the overlay. Switching it off restores the pixels underneath.
+ * Returns 0 if there was nothing saved to restore, which means the stale
+ * rectangle stays on the panel until the host repaints that corner.
+ */
+int panel_fps_overlay_set(uint32_t on);
+
 #endif /* PANEL_H */

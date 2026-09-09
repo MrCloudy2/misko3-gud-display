@@ -1,9 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
-project(misko3 C ASM)
+project(misko3_m9_touch C ASM)
 
 set(CMAKE_C_STANDARD 11)
-# TinyUSB is a submodule one level up. Override with -DTUSB=/path/to/tinyusb/src
 set(TUSB "${CMAKE_SOURCE_DIR}/../tinyusb/src" CACHE PATH "TinyUSB src directory")
+
+set(HALSRC ${CMAKE_SOURCE_DIR}/hal/Src)
 
 add_executable(misko3
     src/main.c
@@ -13,6 +14,19 @@ add_executable(misko3
     src/lz4_dec.c
     src/buttons.c
     src/joystick.c
+    src/touch.c
+    src/hal_glue.c
+
+    # ST HAL: only the modules the joystick and the touch panel need.
+    ${HALSRC}/stm32g4xx_hal.c
+    ${HALSRC}/stm32g4xx_hal_adc.c
+    ${HALSRC}/stm32g4xx_hal_adc_ex.c
+    ${HALSRC}/stm32g4xx_hal_rcc.c
+    ${HALSRC}/stm32g4xx_hal_gpio.c
+    ${HALSRC}/stm32g4xx_hal_spi.c
+    ${HALSRC}/stm32g4xx_hal_cortex.c
+    ${HALSRC}/stm32g4xx_hal_dma.c
+    ${HALSRC}/stm32g4xx_hal_dma_ex.c
     src/usb_descriptors.c
     src/rtt.c
     src/startup_stm32g474qetx.s
@@ -35,6 +49,7 @@ target_include_directories(misko3 PRIVATE
     ${TUSB}
     cmsis/Include
     cmsis/Device/ST/STM32G4xx/Include
+    hal/Inc
 )
 
 target_compile_definitions(misko3 PRIVATE STM32G474xx)
@@ -60,14 +75,4 @@ target_link_options(misko3 PRIVATE
 
 add_custom_command(TARGET misko3 POST_BUILD
     COMMAND arm-none-eabi-size $<TARGET_FILE:misko3>
-
-    # Intel HEX and raw binary alongside the ELF.
-    #
-    # probe-rs is happy with the ELF, but ST's tools (STM32CubeIDE and
-    # STM32CubeProgrammer) want a file whose extension they recognise. HEX is
-    # the one to prefer: it carries its own load addresses, so nothing has to
-    # be typed in. A raw BIN has no addresses at all and must be flashed to
-    # 0x08000000 by hand.
-    COMMAND ${CMAKE_OBJCOPY} -O ihex   $<TARGET_FILE:misko3> $<TARGET_FILE:misko3>.hex
-    COMMAND ${CMAKE_OBJCOPY} -O binary $<TARGET_FILE:misko3> $<TARGET_FILE:misko3>.bin
 )

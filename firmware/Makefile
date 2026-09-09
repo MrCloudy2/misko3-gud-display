@@ -42,6 +42,8 @@ LDSCRIPT := STM32G474QETX_FLASH.ld
 
 SRC_APP := \
   src/main.c \
+  src/touch.c \
+  src/hal_glue.c \
   src/gud_device.c \
   src/gud_usbd.c \
   src/panel.c \
@@ -64,6 +66,18 @@ SRC_TUSB := \
 vpath %.c $(TUSB) $(TUSB)/common $(TUSB)/device $(TUSB)/class/hid \
           $(TUSB)/portable/st/stm32_fsdev
 
+# ST HAL, only the modules the joystick, the touch panel and their pins need.
+SRC_HAL := \
+  hal/Src/stm32g4xx_hal.c \
+  hal/Src/stm32g4xx_hal_adc.c \
+  hal/Src/stm32g4xx_hal_adc_ex.c \
+  hal/Src/stm32g4xx_hal_rcc.c \
+  hal/Src/stm32g4xx_hal_gpio.c \
+  hal/Src/stm32g4xx_hal_spi.c \
+  hal/Src/stm32g4xx_hal_cortex.c \
+  hal/Src/stm32g4xx_hal_dma.c \
+  hal/Src/stm32g4xx_hal_dma_ex.c
+
 SRC_S := src/startup_stm32g474qetx.s
 
 # ------------------------------------------------------------------
@@ -72,7 +86,7 @@ SRC_S := src/startup_stm32g474qetx.s
 
 CPU := -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard
 
-INC := -Isrc -I$(TUSB) -Icmsis/Include -Icmsis/Device/ST/STM32G4xx/Include
+INC := -Isrc -I$(TUSB) -Ihal/Inc -Icmsis/Include -Icmsis/Device/ST/STM32G4xx/Include
 
 CFLAGS := $(CPU) -std=gnu11 -O2 -Wall -Wextra \
           -ffunction-sections -fdata-sections \
@@ -83,7 +97,7 @@ LDFLAGS := $(CPU) -T$(LDSCRIPT) \
            -Wl,--gc-sections -Wl,-Map=$(BUILD)/$(TARGET).map \
            -Wl,--print-memory-usage
 
-OBJ := $(addprefix $(BUILD)/,$(SRC_APP:.c=.o) $(SRC_S:.s=.o)) \
+OBJ := $(addprefix $(BUILD)/,$(SRC_APP:.c=.o) $(SRC_HAL:.c=.o) $(SRC_S:.s=.o)) \
        $(addprefix $(BUILD)/tusb/,$(SRC_TUSB:.c=.o))
 DEP := $(OBJ:.o=.d)
 
@@ -96,6 +110,10 @@ all: $(BUILD)/$(TARGET).elf $(BUILD)/$(TARGET).hex $(BUILD)/$(TARGET).bin
 $(BUILD)/tusb/%.o: %.c
 	$(call mkdir_p,$(patsubst %/,%,$(dir $@)))
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+
+$(BUILD)/hal/%.o: hal/%.c
+	$(call mkdir_p,$(patsubst %/,%,$(dir $@)))
+	$(CC) $(CFLAGS) -Wno-unused-parameter -MMD -MP -c $< -o $@
 
 $(BUILD)/%.o: %.c
 	$(call mkdir_p,$(patsubst %/,%,$(dir $@)))

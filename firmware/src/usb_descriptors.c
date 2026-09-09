@@ -109,20 +109,21 @@ const uint8_t *tud_descriptor_device_cb(void)
  * Interface numbers must run from zero with no gaps. The GUD interface is
  * first because it is the reason the board exists; the gamepad rides along.
  */
-enum { ITF_NUM_GUD = 0, ITF_NUM_HID, ITF_NUM_TOTAL };
+enum { ITF_NUM_GUD = 0, ITF_NUM_HID, ITF_NUM_TOUCH, ITF_NUM_TOTAL };
 
 /*
  * Endpoint addresses. Bit 7 set means IN (device to host).
  *
  * On the G4's fsdev peripheral every endpoint buffer is carved out of a single
  * 1024-byte packet memory area, so the budget is worth stating: endpoint 0
- * takes 64 in and 64 out, the GUD bulk OUT another 64, the HID interrupt IN
- * 16. That is 224 bytes of 1024 -- packet memory is nowhere near a constraint
- * for this design.
+ * takes 64 in and 64 out, the GUD bulk OUT another 64, and the two HID
+ * interrupt IN endpoints 16 each. That is 240 bytes of 1024 -- packet memory
+ * is nowhere near a constraint for this design.
  */
-#define EPNUM_GUD_OUT 0x01    /* endpoint 1, OUT (bit 7 clear) */
-#define EPNUM_HID_IN  0x82    /* endpoint 2, IN                */
-#define GUD_EP_SIZE   64      /* the full-speed maximum for bulk */
+#define EPNUM_GUD_OUT   0x01    /* endpoint 1, OUT (bit 7 clear) */
+#define EPNUM_HID_IN    0x82    /* endpoint 2, IN  -- gamepad    */
+#define EPNUM_TOUCH_IN  0x83    /* endpoint 3, IN  -- touch      */
+#define GUD_EP_SIZE     64      /* the full-speed maximum for bulk */
 
 /*
  * Gamepad report descriptor. TinyUSB's template gives the layout Linux's
@@ -134,21 +135,128 @@ static const uint8_t desc_hid_report[] = {
     TUD_HID_REPORT_DESC_GAMEPAD(),
 };
 
+/*
+ * Touch screen report descriptor, written out by hand.
+ *
+ * TinyUSB has no template for a digitizer, and the layout matters: Linux picks
+ * the host driver from the application usage at the top. A Digitizer / Touch
+ * Screen collection that also reports Contact Identifier and Contact Count is
+ * what hid-multitouch binds to, and hid-multitouch is what sets
+ * INPUT_PROP_DIRECT -- the property libinput uses to tell a touch screen from
+ * a touchpad. Without it the panel would come up as a pointer device and drag
+ * the cursor on the primary screen instead of acting on its own.
+ *
+ * Only one contact is declared. The panel is resistive, and a resistive panel
+ * physically cannot resolve two fingers: it reports a single voltage per axis,
+ * which for two touches lands somewhere between them.
+ *
+ * X and Y are reported in a 0..4095 logical range rather than 0..319 / 0..239.
+ * The panel's own resolution is 12 bits, so this keeps the full precision of
+ * the ADC and lets the host scale to whatever the output size happens to be.
+ *
+ * The report this produces is 7 bytes:
+ *
+ *      byte 0   bit 0    tip switch (1 = touching)
+ *               bits 1-7 padding
+ *      byte 1   contact identifier (always 0)
+ *      bytes 2-3 X, little endian, 0..4095
+ *      bytes 4-5 Y, little endian, 0..4095
+ *      byte 6   contact count (0 or 1)
+ */
+static const uint8_t desc_touch_report[] = {
+    0x05, 0x0D,                    /* Usage Page (Digitizers)             */
+    0x09, 0x04,                    /* Usage (Touch Screen)                */
+    0xA1, 0x01,                    /* Collection (Application)            */
+      0x09, 0x22,                  /*   Usage (Finger)                    */
+      0xA1, 0x02,                  /*   Collection (Logical)              */
+        0x09, 0x42,                /*     Usage (Tip Switch)              */
+        0x15, 0x00,                /*     Logical Minimum (0)             */
+        0x25, 0x01,                /*     Logical Maximum (1)             */
+        0x75, 0x01,                /*     Report Size (1)                 */
+        0x95, 0x01,                /*     Report Count (1)                */
+        0x81, 0x02,                /*     Input (Data,Var,Abs)            */
+        0x95, 0x07,                /*     Report Count (7)                */
+        0x81, 0x03,                /*     Input (Cnst,Var,Abs) - padding  */
+        0x09, 0x51,                /*     Usage (Contact Identifier)      */
+        0x25, 0x7F,                /*     Logical Maximum (127)           */
+        0x75, 0x08,                /*     Report Size (8)                 */
+        0x95, 0x01,                /*     Report Count (1)                */
+        0x81, 0x02,                /*     Input (Data,Var,Abs)            */
+        0x05, 0x01,                /*     Usage Page (Generic Desktop)    */
+        0x15, 0x00,                /*     Logical Minimum (0)             */
+        0x26, 0xFF, 0x0F,          /*     Logical Maximum (4095)          */
+        0x75, 0x10,                /*     Report Size (16)                */
+        0x95, 0x01,                /*     Report Count (1)                */
+        0x09, 0x30,                /*     Usage (X)                       */
+        0x81, 0x02,                /*     Input (Data,Var,Abs)            */
+        0x09, 0x31,                /*     Usage (Y)                       */
+        0x81, 0x02,                /*     Input (Data,Var,Abs)            */
+      0xC0,                        /*   End Collection                    */
+      0x05, 0x0D,                  /*   Usage Page (Digitizers)           */
+      0x09, 0x54,                  /*   Usage (Contact Count)             */
+      0x25, 0x7F,                  /*   Logical Maximum (127)             */
+      0x75, 0x08,                  /*   Report Size (8)                   */
+      0x95, 0x01,                  /*   Report Count (1)                  */
+      0x81, 0x02,                  /*   Input (Data,Var,Abs)              */
+      0x09, 0x55,                  /*   Usage (Contact Count Maximum)     */
+      0x25, 0x01,                  /*   Logical Maximum (1)               */
+      0xB1, 0x02,                  /*   Feature (Data,Var,Abs)            */
+    0xC0                           /* End Collection                      */
+};
+
 const uint8_t *tud_hid_descriptor_report_cb(uint8_t instance)
 {
-    (void) instance;
-    return desc_hid_report;
+    return (instance == 0) ? desc_hid_report : desc_touch_report;
 }
 
-/* Mandatory callbacks. We never send feature reports, and we ignore host
- * output reports -- a gamepad with rumble would act on SET_REPORT here. */
+/*
+ * GET_REPORT.
+ *
+ * The gamepad answers nothing. The touch screen must answer one feature
+ * report: hid-multitouch reads Contact Count Maximum during probe to size its
+ * slot table, and a device that does not answer it is rejected. One byte,
+ * value 1, because the panel is resistive and resolves a single contact.
+ */
 uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id,
                                hid_report_type_t report_type,
                                uint8_t *buffer, uint16_t reqlen)
 {
-    (void) instance; (void) report_id; (void) report_type;
-    (void) buffer; (void) reqlen;
-    return 0;
+    (void) report_id;
+
+    /*
+     * Contact Count Maximum, read by hid-multitouch while it probes.
+     *
+     * Note there is no length test here. The host asks for this with
+     * wLength = 0 first, and returning 0 from this callback is fatal:
+     * hidd_control_xfer_cb() does TU_ASSERT(xferlen > 0), and TU_ASSERT
+     * expands to a BKPT that fires only when a debugger is attached. The
+     * board therefore worked perfectly in normal use and halted the instant
+     * probe-rs connected, which is a memorable way to lose an evening.
+     *
+     * Answering with one byte is safe either way: tud_control_xfer() clamps
+     * the data stage to wLength, so a zero-length request still produces a
+     * zero-length data stage.
+     */
+    if (report_type == HID_REPORT_TYPE_FEATURE && instance == 1) {
+        buffer[0] = 1;
+        return 1;
+    }
+
+    /*
+     * Any other report fetched over the control pipe. Nothing needs these:
+     * button and touch state travels on its own interrupt endpoint. They are
+     * answered with a zeroed report of the declared size, for the same reason
+     * as above: this callback must never return zero.
+     */
+    uint16_t len = (instance == 0) ? (uint16_t) sizeof(hid_gamepad_report_t)
+                                   : 7u;    /* touch report, see desc_touch_report */
+    if (reqlen && len > reqlen)
+        len = reqlen;
+    if (len == 0)
+        len = 1;
+
+    memset(buffer, 0, len);
+    return len;
 }
 
 void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
@@ -159,7 +267,7 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
     (void) buffer; (void) bufsize;
 }
 
-#define CONFIG_TOTAL_LEN (9 + 9 + 7 + TUD_HID_DESC_LEN)
+#define CONFIG_TOTAL_LEN (9 + 9 + 7 + TUD_HID_DESC_LEN + TUD_HID_DESC_LEN)
 
 static const uint8_t desc_configuration[] = {
     /* ---- Configuration descriptor ---- */
@@ -199,6 +307,14 @@ static const uint8_t desc_configuration[] = {
     TUD_HID_DESCRIPTOR(ITF_NUM_HID, 5, HID_ITF_PROTOCOL_NONE,
                        sizeof(desc_hid_report), EPNUM_HID_IN,
                        CFG_TUD_HID_EP_BUFSIZE, 10),
+
+    /* ---- Interface 2: the touch screen ----
+     * bInterval 10 ms, the same as the gamepad. A resistive panel read with
+     * 8 averaged samples cannot usefully go faster, and every interrupt
+     * endpoint reserves bandwidth in every frame whether or not it is used. */
+    TUD_HID_DESCRIPTOR(ITF_NUM_TOUCH, 6, HID_ITF_PROTOCOL_NONE,
+                       sizeof(desc_touch_report), EPNUM_TOUCH_IN,
+                       CFG_TUD_HID_EP_BUFSIZE, 10),
 };
 
 const uint8_t *tud_descriptor_configuration_cb(uint8_t index)
@@ -236,7 +352,8 @@ static const char *string_desc_arr[] = {
     "Gamepad",                       /* 2: Product      -> "... Gamepad"   */
     NULL,                            /* 3: Serial, built at runtime        */
     "MiSKo3 GUD",                    /* 4: GUD interface (unused by hid)   */
-    "MiSKo3 Gamepad",                /* 5: HID interface (unused by hid)   */
+    "MiSKo3 Gamepad",                /* 5: gamepad interface               */
+    "MiSKo3 Touch",                  /* 6: touch screen interface          */
 };
 
 /*
